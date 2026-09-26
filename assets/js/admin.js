@@ -1,8 +1,48 @@
 (function(){
   "use strict";
-  var UI=window.SedekahUI, API=window.SedekahAPI, config=window.SEDEKAH_CONFIG||{}, token="", data=null, currentType="", currentItem=null;
-  var auth=firebase.auth();
+  var UI=window.SedekahUI, API=window.SedekahAPI, config=window.SEDEKAH_CONFIG||{}, token="", email="", data=null, currentType="", currentItem=null;
+  var authReady=false, auth=null, rtdb=null;
   var pendingUploads=0;
+
+  // Inisialisasi Firebase (compat SDK) dari window.SEDEKAH_CONFIG.
+  function initFirebase(){
+    if(authReady)return true;
+    try{
+      if(typeof firebase==="undefined"||!config.firebaseApiKey||/placeholder/i.test(config.firebaseApiKey)){return false;}
+      firebase.initializeApp({apiKey:config.firebaseApiKey,authDomain:config.firebaseAuthDomain||"",databaseURL:config.firebaseDatabaseUrl,projectId:config.firebaseProjectId||""});
+      auth=firebase.auth();
+      rtdb=firebase.database();
+      authReady=true;
+      return true;
+    }catch(e){console.error("Firebase init gagal:",e);return false;}
+  }
+
+  // Ambil role admin langsung dari RTDB melalui SDK (menghormati rules & token sesi).
+  function getAdminRole(uid){
+    if(!rtdb)return Promise.resolve(null);
+    return new Promise(function(resolve,reject){
+      var ref=rtdb.ref("admins/"+uid);
+      var timer=setTimeout(function(){resolve(null);},8000);
+      ref.once("value").then(function(snap){clearTimeout(timer);var v=snap&&snap.val();resolve(v&&typeof v==="object"?v:null);})
+      .catch(function(err){clearTimeout(timer);reject(err);});
+    });
+  }
+
+  function authErrorMessage(err){
+    var code=(err&&(err.code||""))+"";
+    var map={
+      "auth/invalid-email":"Format email tidak valid.",
+      "auth/user-disabled":"Akun ini dinonaktifkan. Hubungi superadmin.",
+      "auth/user-not-found":"Email atau password salah.",
+      "auth/wrong-password":"Email atau password salah.",
+      "auth/invalid-credential":"Email atau password salah.",
+      "auth/not-allowed":"Provider Email/Password belum diaktifkan pada project Firebase.",
+      "auth/too-many-requests":"Terlalu banyak percobaan gagal. Tunggu beberapa saat lalu coba lagi.",
+      "auth/network-request-failed":"Koneksi jaringan ke Firebase gagal. Periksa koneksi Anda.",
+      "auth/api-key-not-valid":"Firebase API Key tidak valid — perbarui assets/js/config.js."
+    };
+    return map[code]||((err&&err.message)||"Gagal masuk. Coba lagi.");
+  }
   
   var schemas={
     program:[
@@ -28,7 +68,7 @@
   function saveToken(v){try{sessionStorage.setItem("firebase_admin_uid",v);}catch(e){}}
   function savedToken(){try{return sessionStorage.getItem("firebase_admin_uid")||"";}catch(e){return"";}}
   function clearToken(){try{sessionStorage.removeItem("firebase_admin_uid");}catch(e){}}
-catch(e){return"Admin";}}
+  function jwtEmail(){return email||"Admin";}
   
   async function call(action,payload){
     if(!token)throw new Error("Sesi admin berakhir.");
@@ -37,8 +77,8 @@ catch(e){return"Admin";}}
   }
   
   function loading(on){UI.$("#admin-loading").classList.toggle("hidden",!on);UI.$("#admin-app").setAttribute("aria-busy",String(on));}
-  function showLogin(message){UI.$("#admin-login").classList.remove("hidden");UI.$("#admin-app").classList.add("hidden");if(message){UI.setText("#login-error",message);UI.$("#login-error").classList.remove("hidden");}}
-  function showApp(){UI.$("#admin-login").classList.add("hidden");UI.$("#admin-app").classList.remove("hidden");UI.setText("#admin-email",jwtEmail(token));}
+  function showLogin(message){UI.$("#admin-login").classList.remove("hidden");UI.$("#admin-app").classList.add("hidden");var pw=UI.$("#admin-password");if(pw)pw.value="";if(message){UI.setText("#login-error",message);UI.$("#login-error").classList.remove("hidden");}}
+  function showApp(){UI.$("#admin-login").classList.add("hidden");UI.$("#admin-app").classList.remove("hidden");UI.setText("#admin-email",jwtEmail());}
   async function load(){loading(true);try{data=await call("adminDashboard");renderAll();saveToken(token);}finally{loading(false);}}
   
   function switchSection(name){
